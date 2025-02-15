@@ -17,3 +17,7 @@ SELECT f.name FROM feed_follows ff JOIN feeds f ON ff.feed_id=f.id JOIN users u 
 
 -- name: GetFeedURL :one
 SELECT * FROM feeds WHERE url=$1;
+
+-- name: DeleteFeedFollow :one
+DELETE FROM feed_follows ff WHERE ff.feed_id=(SELECT id FROM feeds where url=$1) AND ff.user_id=$2
+RETURNING *;

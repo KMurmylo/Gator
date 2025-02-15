@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"gator/internal/database"
 	"html"
+	"log"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -99,28 +102,37 @@ func handlerGetUsers(s *state, cmd command) error {
 
 }
 func handlerAgg(s *state, cmd command) error {
-	rss, err := fetchFeed(context.Background(), "https://www.wagslane.dev/index.xml")
+	if len(cmd.arguments) < 1 {
+		return fmt.Errorf("Didnt specify time")
+	}
+	timeBetweenRequests, err := time.ParseDuration(cmd.arguments[0])
 	if err != nil {
 		return err
 	}
-	rss.Channel.Title = html.UnescapeString(rss.Channel.Title)
-	rss.Channel.Description = html.UnescapeString(rss.Channel.Description)
-	for i, value := range rss.Channel.Item {
-		rss.Channel.Item[i].Description = html.UnescapeString(value.Description)
-		rss.Channel.Item[i].Title = html.UnescapeString(value.Title)
+	fmt.Printf("Collecting message every: %s", timeBetweenRequests)
+	ticker := time.NewTicker(timeBetweenRequests)
+	for ; ; <-ticker.C {
+		fmt.Printf("Collecting...\n")
+		scrapeFeeds(s)
 	}
-	fmt.Println(rss)
 	return nil
+	//}
+	//rss, err := fetchFeed(context.Background(), "https://www.wagslane.dev/index.xml")
+	//if err != nil {
+	//	return err
+	//}
+	//rss.Channel.Title = html.UnescapeString(rss.Channel.Title)
+	//rss.Channel.Description = html.UnescapeString(rss.Channel.Description)
+	//for i, value := range rss.Channel.Item {
+	//	rss.Channel.Item[i].Description = html.UnescapeString(value.Description)
+	//	rss.Channel.Item[i].Title = html.UnescapeString(value.Title)
+	//}
+	//fmt.Println(rss)
+
 }
-func handlerAddFeed(s *state, cmd command) error {
+func handlerAddFeed(s *state, cmd command, user database.User) error {
 	if len(cmd.arguments) < 2 {
 		return fmt.Errorf("not enough arguments, needs name and url")
-	}
-	user, err := s.db.GetUser(context.Background(), s.config.UserName)
-	if err == sql.ErrNoRows {
-		return fmt.Errorf("no user found with that name")
-	} else if err != nil {
-		return fmt.Errorf("unexpected database error: %w", err)
 	}
 
 	feed, err := s.db.InsertFeed(context.Background(), database.InsertFeedParams{
@@ -166,7 +178,7 @@ func handlerListFeeds(s *state, cmd command) error {
 	return nil
 
 }
-func handlerFollow(s *state, cmd command) error {
+func handlerFollow(s *state, cmd command, user database.User) error {
 	if len(cmd.arguments) < 1 {
 		return fmt.Errorf("No url provided")
 	}
@@ -175,10 +187,7 @@ func handlerFollow(s *state, cmd command) error {
 	if err != nil {
 		return fmt.Errorf("failed to fetch feed: %w", err)
 	}
-	user, err := s.db.GetUser(context.Background(), s.config.UserName)
-	if err != nil {
-		return fmt.Errorf("failed to fetch user: %w", err)
-	}
+
 	_, err = s.db.CreateFeedFollow(context.Background(), database.CreateFeedFollowParams{
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -201,7 +210,8 @@ func handlerFollowing(s *state, cmd command) error {
 		return fmt.Errorf("failed to fetch feeds: %w", err)
 	}
 	if len(feeds) == 0 {
-		fmt.Printf("%s isn't following any feeds", s.config.UserName)
+		fmt.Printf("%s isn't following any feeds\n", s.config.UserName)
+		return nil
 	}
 	fmt.Printf("%s is following:\n", s.config.UserName)
 	for _, value := range feeds {
@@ -221,4 +231,111 @@ func middlewareLoggedIn(handler func(s *state, cmd command, user database.User) 
 		}
 		return handler(s, cmd, user)
 	}
+}
+func handlerUnfollow(s *state, cmd command, user database.User) error {
+	if len(cmd.arguments) < 1 {
+		return fmt.Errorf("No url provided")
+	}
+	_, err := s.db.DeleteFeedFollow(context.Background(), database.DeleteFeedFollowParams{
+		Url:    cmd.arguments[0],
+		UserID: user.ID,
+	})
+	if err != nil {
+		return err
+	}
+	return nil
+}
+func scrapeFeeds(s *state) error {
+	nextFetch, err := s.db.GetNextFeedToFetch(context.Background())
+	if err != nil {
+		return err
+	}
+	rss, err := fetchFeed(context.Background(), nextFetch.Url)
+	if err != nil {
+		return err
+	}
+	s.db.MarkFeedFetched(context.Background(), nextFetch.ID)
+	for _, item := range rss.Channel.Item {
+		//fmt.Printf("%s", item.Title)
+		parsedTime, err := time.Parse("2006-01-02T15:04:05Z07:00", item.PubDate)
+		if err != nil {
+			parsedTime, err = time.Parse("Mon, 02 Jan 2006 15:04:05 MST", item.PubDate)
+			if err != nil {
+				parsedTime = time.Now()
+			}
+		}
+		description := sql.NullString{
+			String: "",
+			Valid:  false,
+		}
+		if item.Description != "" {
+			description.String = item.Description
+			description.Valid = true
+		}
+		_, err = s.db.CreatePost(context.Background(), database.CreatePostParams{
+			CreatedAt:   time.Now(),
+			UpdatedAt:   time.Now(),
+			Title:       item.Title,
+			Url:         item.Link,
+			Description: description,
+			PublishedAt: parsedTime,
+			FeedID:      nextFetch.ID,
+		})
+		if err != nil {
+			if pqErr, ok := err.(*pq.Error); ok {
+				if pqErr.Code == "23505" {
+					continue
+				}
+			} else {
+				log.Printf("error creating post: %v", err)
+			}
+		}
+	}
+	return nil
+}
+func handlerBrowse(s *state, cmd command, user database.User) error {
+	limit := 2
+	if len(cmd.arguments) >= 1 {
+		parsedLimit, err := strconv.Atoi(cmd.arguments[0])
+		if err != nil {
+			return err
+		}
+		limit = parsedLimit
+	}
+	posts, err := s.db.GetPostsForUser(context.Background(), database.GetPostsForUserParams{
+		Limit:  int32(limit),
+		UserID: user.ID,
+	})
+	if err != nil {
+		return err
+	}
+	if len(posts) == 0 {
+		fmt.Println("No posts to browse")
+		return nil
+	}
+	fmt.Println("---------------------------------")
+	for _, value := range posts {
+		fmt.Printf("Title: %s\n", value.Title)
+		if value.Description.Valid {
+
+			isJustCommentsLink := strings.HasPrefix(value.Description.String, "<a href=\"https://news.ycombinator.com/item?") &&
+				strings.HasSuffix(value.Description.String, ">Comments</a>")
+
+			if !isJustCommentsLink {
+				desc := strings.ReplaceAll(value.Description.String, "<p>", "")
+				desc = strings.ReplaceAll(desc, "</p>", "\n")
+				desc = strings.ReplaceAll(desc, "<a>", "")
+				desc = strings.ReplaceAll(desc, "</a>", "")
+				desc = html.UnescapeString(desc)
+
+				fmt.Printf("\nDescription: %s\n", strings.TrimSpace(desc))
+			}
+
+		}
+		//fmt.Printf("Published at: %s\n", value.PublishedAt)
+		fmt.Printf("\nPublished: %s\n", value.PublishedAt.Format("2006-01-02 15:04 UTC"))
+		fmt.Println("---------------------------------")
+	}
+
+	return nil
 }
