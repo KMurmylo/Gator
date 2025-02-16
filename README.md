@@ -1,4 +1,22 @@
+Require:
+Go v1.20+
+postgres 16.6+
 
+setup
+create database for "gator"  by running command 
+CREATE DATABASE gator;
+ in database.
+Then, apply the provided schema by running:
+
+psql -U <username> -d gator -f sql/schema.sql
+Replace <username> with your Postgres username."
+
+In the gatorconfig.json file, set the db_url field to point to your Postgres database. For example:
+
+{
+  "db_url": "postgres://<DB username>:<DB password>@localhost:5432/gator?sslmode=disable"
+}
+Replace <DB username> and <DB password> with your Postgres credentials."
 
 gator commands:
 register (name)
