@@ -26,7 +26,7 @@ type RSSItem struct {
 
 func fetchFeed(ctx context.Context, feedURL string) (*RSSFeed, error) {
 	//res, err := http.Get(feedURL)
-	req, err := http.NewRequestWithContext(context.Background(), "GET", feedURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", feedURL, nil)
 	if err != nil {
 		return nil, err
 	}

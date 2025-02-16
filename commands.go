@@ -103,7 +103,7 @@ func handlerGetUsers(s *state, cmd command) error {
 }
 func handlerAgg(s *state, cmd command) error {
 	if len(cmd.arguments) < 1 {
-		return fmt.Errorf("Didnt specify time")
+		return fmt.Errorf("didnt specify time")
 	}
 	timeBetweenRequests, err := time.ParseDuration(cmd.arguments[0])
 	if err != nil {
@@ -180,7 +180,7 @@ func handlerListFeeds(s *state, cmd command) error {
 }
 func handlerFollow(s *state, cmd command, user database.User) error {
 	if len(cmd.arguments) < 1 {
-		return fmt.Errorf("No url provided")
+		return fmt.Errorf("no url provided")
 	}
 
 	feed, err := s.db.GetFeedURL(context.Background(), cmd.arguments[0])
@@ -234,7 +234,7 @@ func middlewareLoggedIn(handler func(s *state, cmd command, user database.User) 
 }
 func handlerUnfollow(s *state, cmd command, user database.User) error {
 	if len(cmd.arguments) < 1 {
-		return fmt.Errorf("No url provided")
+		return fmt.Errorf("no url provided")
 	}
 	_, err := s.db.DeleteFeedFollow(context.Background(), database.DeleteFeedFollowParams{
 		Url:    cmd.arguments[0],
